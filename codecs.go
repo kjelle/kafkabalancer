@@ -12,7 +12,7 @@ import (
 	kazoo "github.com/wvanbergen/kazoo-go"
 )
 
-func GetPartitionListFromReader(in io.Reader, isJSON bool) (*PartitionList, error) {
+func GetPartitionListFromReader(in io.Reader, isJSON bool, tns TopicNames) (*PartitionList, error) {
 	pl := &PartitionList{}
 
 	if isJSON {
@@ -32,6 +32,11 @@ func GetPartitionListFromReader(in io.Reader, isJSON bool) (*PartitionList, erro
 			if m == nil {
 				continue
 			}
+
+			if len(tns) > 0 && !tns.Contains(TopicName(m[1])) {
+				continue
+			}
+
 			partition, _ := strconv.Atoi(m[2])
 			strreplicas := strings.Split(m[4], ",")
 			var replicas []BrokerID
@@ -58,6 +63,24 @@ func GetPartitionListFromReader(in io.Reader, isJSON bool) (*PartitionList, erro
 	return pl, nil
 }
 
+// FilterPartitionList will ensure that a topic+partition only exists once
+func FilterPartitionList(pl *PartitionList) *PartitionList {
+	ppl := &PartitionList{Version: pl.Version}
+	hpl := make(map[TopicName]map[PartitionID]bool)
+
+	for _, p := range pl.Partitions {
+		if _, ok := hpl[p.Topic]; !ok {
+			hpl[p.Topic] = make(map[PartitionID]bool)
+		}
+
+		if !hpl[p.Topic][p.Partition] {
+			hpl[p.Topic][p.Partition] = true
+			ppl.Partitions = append(ppl.Partitions, p)
+		}
+	}
+	return ppl
+}
+
 func WritePartitionList(out io.Writer, pl *PartitionList) error {
 	enc := json.NewEncoder(out)
 	pl.Version = 1
@@ -69,7 +92,7 @@ func WritePartitionList(out io.Writer, pl *PartitionList) error {
 	return nil
 }
 
-func GetPartitionListFromZookeeper(zkConnStr string) (*PartitionList, error) {
+func GetPartitionListFromZookeeper(zkConnStr string, tns TopicNames) (*PartitionList, error) {
 	zk, err := kazoo.NewKazooFromConnectionString(zkConnStr, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed parsing zk connection string: %v", err)
@@ -84,6 +107,10 @@ func GetPartitionListFromZookeeper(zkConnStr string) (*PartitionList, error) {
 	}
 
 	for _, topic := range topics {
+		if len(tns) > 0 && !tns.Contains(TopicName(topic.Name)) {
+			continue
+		}
+
 		partitions, err := topic.Partitions()
 		if err != nil {
 			return nil, fmt.Errorf("failed reading partition list for topic %s from zk: %v", topic.Name, err)

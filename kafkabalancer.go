@@ -16,10 +16,24 @@ import (
 type BrokerID int
 type PartitionID int
 type TopicName string
+type TopicNames []TopicName
+
+func (tn TopicNames) Contains(tn2 TopicName) bool {
+	for _, t1 := range tn {
+		if t1 == tn2 {
+			return true
+		}
+	}
+	return false
+}
 
 type PartitionList struct {
 	Version    int         `json:"version"`
 	Partitions []Partition `json:"partitions"`
+}
+
+func (p PartitionList) String() string {
+	return fmt.Sprintf("PartitionList(%+v)", p.Partitions)
 }
 
 type Partition struct {
@@ -31,6 +45,14 @@ type Partition struct {
 	NumReplicas  int        `json:"num_replicas,omitempty"`  // default: len(replicas)
 	Brokers      []BrokerID `json:"brokers,omitempty"`       // default: (auto)
 	NumConsumers int        `json:"num_consumers,omitempty"` // default: 1
+}
+
+func (p *Partition) Compare(p2 *Partition) bool {
+	return p.Topic == p2.Topic && p.Partition == p2.Partition
+}
+
+func (p Partition) String() string {
+	return fmt.Sprintf("Partition(%s,%d,%+v)", p.Topic, p.Partition, p.Replicas)
 }
 
 func main() {
@@ -49,8 +71,11 @@ func run(i io.Reader, o io.Writer, e io.Writer, args []string) int {
 	fromZK := f.String("from-zk", "", "Zookeeper connection string (can not be used with -input)")
 	maxReassign := f.Int("max-reassign", 1, "Maximum number of reassignments to generate")
 	fullOutput := f.Bool("full-output", false, "Output the full partition list: by default only the changes are printed")
+	unique := f.Bool("unique", false, "Output only unique topic+partition")
 	pprof := f.Bool("pprof", false, "Enable CPU profiling")
 	allowLeader := f.Bool("allow-leader", DefaultRebalanceConfig().AllowLeaderRebalancing, "Consider the partition leader eligible for rebalancing")
+	completePartition := f.Bool("complete-partition", DefaultRebalanceConfig().CompletePartition, "Force to always complete a topic+partition's replicas to be valid.")
+	selectedTopics := f.String("topics", "", "Only process these commaseparated topics")
 	minReplicas := f.Int("min-replicas", DefaultRebalanceConfig().MinReplicasForRebalancing, "Minimum number of replicas for a partition to be eligible for rebalancing")
 	minUnbalance := f.Float64("min-unbalance", DefaultRebalanceConfig().MinUnbalance, "Minimum unbalance value required to perform rebalancing")
 	brokerIDs := f.String("broker-ids", "auto", "Comma-separated list of broker IDs")
@@ -109,11 +134,16 @@ func run(i io.Reader, o io.Writer, e io.Writer, args []string) int {
 
 	out := o
 
+	var tns TopicNames
+	for _, t := range strings.Split(*selectedTopics, ",") {
+		tns = append(tns, TopicName(t))
+	}
+
 	var pl *PartitionList
 	if *fromZK != "" {
-		pl, err = GetPartitionListFromZookeeper(*fromZK)
+		pl, err = GetPartitionListFromZookeeper(*fromZK, tns)
 	} else {
-		pl, err = GetPartitionListFromReader(in, *jsonInput)
+		pl, err = GetPartitionListFromReader(in, *jsonInput, tns)
 	}
 	if err != nil {
 		log.Printf("failed getting partition list: %s", err)
@@ -130,8 +160,11 @@ func run(i io.Reader, o io.Writer, e io.Writer, args []string) int {
 	log.Printf("rebalance config: %+v", cfg)
 
 	opl := emptypl()
-
-	for i := 0; i < *maxReassign; i++ {
+	var completing bool
+	var cPartition Partition
+	r := *maxReassign
+MainLoop:
+	for r > 0 {
 		ppl, err := Balance(pl, cfg)
 		if err != nil {
 			log.Printf("failed optimizing distribution: %s", err)
@@ -139,10 +172,38 @@ func run(i io.Reader, o io.Writer, e io.Writer, args []string) int {
 		}
 
 		if len(ppl.Partitions) == 0 {
-			break
+			log.Printf("No partitions from Balance, breaking.")
+			break MainLoop
 		}
 
-		opl.Partitions = append(opl.Partitions, ppl.Partitions...)
+		if !completing {
+			opl.Partitions = append(opl.Partitions, ppl.Partitions...)
+		} else {
+			// Only add Partition's that compare to cPartition
+			for i := 0; i < len(ppl.Partitions); i++ {
+				p := ppl.Partitions[i]
+				if cPartition.Compare(&p) {
+					opl.Partitions = append(opl.Partitions, p)
+				} else {
+					//			log.Printf("Partition %+v did not compare.", p)
+					break MainLoop
+				}
+			}
+
+		}
+
+		r--
+		// if this is the last assign, and cPartition is set,
+		// we will ensure this entire partition is complete.
+		if r == 0 && *completePartition == true {
+			r = 1
+
+			if !completing {
+				cPartition = ppl.Partitions[len(ppl.Partitions)-1]
+				completing = true
+				log.Printf("Forcing complete of Partition: %+v", cPartition)
+			}
+		}
 	}
 
 	be.Flush(true)
@@ -150,6 +211,12 @@ func run(i io.Reader, o io.Writer, e io.Writer, args []string) int {
 	if *fullOutput {
 		opl = pl
 	}
+
+	if *unique {
+		// Filter out only unique changes per Partition (topic/partition)
+		opl = FilterPartitionList(opl)
+	}
+
 	err = WritePartitionList(out, opl)
 	if err != nil {
 		log.Printf("failed writing partition list: %s", err)

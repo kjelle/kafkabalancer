@@ -13,6 +13,7 @@ type RebalanceConfig struct {
 	AllowLeaderRebalancing    bool
 	MinReplicasForRebalancing int
 	MinUnbalance              float64
+	CompletePartition         bool
 
 	Brokers []BrokerID
 }
@@ -24,6 +25,7 @@ func DefaultRebalanceConfig() RebalanceConfig {
 		AllowLeaderRebalancing:    false,
 		MinReplicasForRebalancing: 2,
 		MinUnbalance:              0.00001,
+		CompletePartition:         true,
 	}
 }
 
