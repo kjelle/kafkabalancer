@@ -24,7 +24,7 @@ func DefaultRebalanceConfig() RebalanceConfig {
 	return RebalanceConfig{
 		AllowLeaderRebalancing:    false,
 		MinReplicasForRebalancing: 2,
-		MinUnbalance:              0.00001,
+		MinUnbalance:              0.01,
 		CompletePartition:         true,
 	}
 }

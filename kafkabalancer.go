@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cafxx/kafkabalancer/logbuf"
+	"github.com/kjelle/kafkabalancer/logbuf"
 	"github.com/pkg/profile"
 )
 
@@ -172,7 +172,6 @@ MainLoop:
 		}
 
 		if len(ppl.Partitions) == 0 {
-			log.Printf("No partitions from Balance, breaking.")
 			break MainLoop
 		}
 
@@ -185,7 +184,7 @@ MainLoop:
 				if cPartition.Compare(&p) {
 					opl.Partitions = append(opl.Partitions, p)
 				} else {
-					//			log.Printf("Partition %+v did not compare.", p)
+					log.Printf("Partition %+v did not compare.", p)
 					break MainLoop
 				}
 			}
