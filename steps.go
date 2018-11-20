@@ -146,16 +146,23 @@ func move(pl *PartitionList, cfg RebalanceConfig, leaders bool) (*PartitionList,
 	var cp Partition
 	var cr, cb BrokerID
 
+	//fmt.Printf("Brokers: %#q\n", cfg.Brokers)
 	loads := getBrokerLoad(pl)
 	for _, id := range cfg.Brokers {
 		if _, found := loads[id]; !found {
-			loads[id] = 0
+			loads[id] = 0 // default, a broker has no load.
 		}
 	}
 
 	bl := getBL(loads)
+	/*	for _, bl := range bl {
+		fmt.Printf("%d: %f\n", bl.ID, bl.Load)
+	}*/
+
 	su := getUnbalanceBL(bl)
 	cu := su
+
+	//	fmt.Printf("su: %f\n", su)
 
 	for _, p := range pl.Partitions {
 		if p.NumReplicas < cfg.MinReplicasForRebalancing {
@@ -168,6 +175,7 @@ func move(pl *PartitionList, cfg RebalanceConfig, leaders bool) (*PartitionList,
 		}
 
 		for _, r := range replicas {
+			//fmt.Printf("assessing Partition: %s Replica: %d\n", p, r)
 			ridx := -1
 			var rload float64
 			for idx, b := range bl {
@@ -183,18 +191,29 @@ func move(pl *PartitionList, cfg RebalanceConfig, leaders bool) (*PartitionList,
 
 			for idx, b := range bl {
 				if !inBrokerList(p.Brokers, b.ID) {
+					//fmt.Printf("Broker: %d not in brokers: %#q\n", b.ID, p.Brokers)
 					continue
 				}
+
+				// allow moving the actual leader, even if all replicas are adjusted.
 				if inBrokerList(p.Replicas, b.ID) {
 					continue
 				}
 
+				//				fmt.Printf("Broker#%d (load: %f) not in replicas: %#q\n", b.ID, bl[idx].Load, p.Replicas)
+
 				bload := bl[idx].Load
+				//fmt.Printf("We try to add %f to broker#%d which will get %f load to see if it is less unbalanced.\n", p.Weight, bl[idx].ID, bl[idx].Load+p.Weight)
 				bl[idx].Load += p.Weight
 				u := getUnbalanceBL(bl)
+				//				fmt.Printf("u: %f\n", u)
+
 				if u < cu {
+					//					fmt.Printf("> that helped! updateding cu from %f -> %f\n", cu, u)
 					cu, cp, cr, cb = u, p, r, b.ID
-				}
+				} /*  else {
+					fmt.Printf("<< That did not help.\n")
+				} */
 
 				bl[idx].Load = bload
 			}
@@ -203,8 +222,60 @@ func move(pl *PartitionList, cfg RebalanceConfig, leaders bool) (*PartitionList,
 		}
 	}
 
+	//fmt.Printf("cu: %f su: %f\n", cu, su)
+	//fmt.Printf("Unbalance? %f < %f\n", cu, su-cfg.MinUnbalance)
 	if cu < su-cfg.MinUnbalance {
 		return replacepl(cp, cr, cb), nil
+	}
+
+	return nil, nil
+}
+
+func distributeLeaders(pl *PartitionList, cfg RebalanceConfig) (*PartitionList, error) {
+	loads := getBrokerLoad(pl)
+	for _, id := range cfg.Brokers {
+		if _, found := loads[id]; !found {
+			loads[id] = 0 // default, a broker has no load.
+		}
+	}
+
+	bl := getBL(loads)
+	//	for _, bl := range bl {
+	//		fmt.Printf("balance leader: %d: %f\n", bl.ID, bl.Load)
+	//	}
+
+	su := getUnbalanceBL(bl)
+	//	fmt.Printf("balance leader su: %f\n", su)
+	if su < cfg.MinUnbalance {
+		//		fmt.Printf("balance leader not enough unbalance (%f) compared to MinUnbalance %f\n", su, cfg.MinUnbalance)
+		return nil, nil
+
+	}
+
+	heavyLoadedBroker := bl[len(bl)-1]
+	//	fmt.Printf("balance leader Find the partiitons for the broker with the hardest load: %s\n", heavyLoadedBroker.ID.String())
+	pp := []Partition{}
+	for _, p := range pl.Partitions {
+		if p.Replicas[0] == heavyLoadedBroker.ID {
+			pp = append(pp, p)
+		}
+	}
+	//	fmt.Printf("balance leader Heavy Partitions to balance away! %+v\n", pp)
+	for _, p := range pp {
+		if p.NumReplicas < cfg.MinReplicasForRebalancing {
+			continue
+		}
+
+		//		fmt.Printf("balance leader for Partition: %s\n", p)
+
+		// We select all brokers from the replica list, including the leader (from idx 0)
+		//replicas := p.Replicas[0:1]
+
+		// From that list we find the broker with the least load.
+		//	bl := getBL(loads)
+		//		fmt.Printf("balance leader  give leadership of partition %s to broker %s from broker %s\n", p.Partition.String(), bl[0].ID.String(), p.Replicas[0])
+
+		return replacepl(p, p.Replicas[0], bl[0].ID), nil
 	}
 
 	return nil, nil
@@ -224,4 +295,13 @@ func MoveLeaders(pl *PartitionList, cfg RebalanceConfig) (*PartitionList, error)
 	}
 
 	return move(pl, cfg, true)
+}
+
+// RebalanceLeaders rebalances the leaders which already have replicas
+func ReassignLeaders(pl *PartitionList, cfg RebalanceConfig) (*PartitionList, error) {
+	if !cfg.RebalanceLeaders {
+		return nil, nil
+	}
+
+	return distributeLeaders(pl, cfg)
 }

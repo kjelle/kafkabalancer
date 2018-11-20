@@ -14,7 +14,17 @@ import (
 )
 
 type BrokerID int
+
+func (b BrokerID) String() string {
+	return fmt.Sprintf("%d", b)
+}
+
 type PartitionID int
+
+func (p PartitionID) String() string {
+	return fmt.Sprintf("%d", p)
+}
+
 type TopicName string
 type TopicNames []TopicName
 
@@ -74,6 +84,7 @@ func run(i io.Reader, o io.Writer, e io.Writer, args []string) int {
 	unique := f.Bool("unique", false, "Output only unique topic+partition")
 	pprof := f.Bool("pprof", false, "Enable CPU profiling")
 	allowLeader := f.Bool("allow-leader", DefaultRebalanceConfig().AllowLeaderRebalancing, "Consider the partition leader eligible for rebalancing")
+	rebalanceLeader := f.Bool("rebalance-leader", DefaultRebalanceConfig().RebalanceLeaders, "Force rebalance leadership")
 	completePartition := f.Bool("complete-partition", DefaultRebalanceConfig().CompletePartition, "Force to always complete a topic+partition's replicas to be valid.")
 	selectedTopics := f.String("topics", "", "Only process these commaseparated topics")
 	minReplicas := f.Int("min-replicas", DefaultRebalanceConfig().MinReplicasForRebalancing, "Minimum number of replicas for a partition to be eligible for rebalancing")
@@ -136,6 +147,9 @@ func run(i io.Reader, o io.Writer, e io.Writer, args []string) int {
 
 	var tns TopicNames
 	for _, t := range strings.Split(*selectedTopics, ",") {
+		if len(t) < 1 {
+			continue
+		}
 		tns = append(tns, TopicName(t))
 	}
 
@@ -152,6 +166,7 @@ func run(i io.Reader, o io.Writer, e io.Writer, args []string) int {
 
 	cfg := RebalanceConfig{
 		AllowLeaderRebalancing:    *allowLeader,
+		RebalanceLeaders:          *rebalanceLeader,
 		MinReplicasForRebalancing: *minReplicas,
 		MinUnbalance:              *minUnbalance,
 		Brokers:                   brokers,
@@ -215,6 +230,7 @@ MainLoop:
 		// Filter out only unique changes per Partition (topic/partition)
 		opl = FilterPartitionList(opl)
 	}
+	log.Printf("Writing %d changes.", len(opl.Partitions))
 
 	err = WritePartitionList(out, opl)
 	if err != nil {

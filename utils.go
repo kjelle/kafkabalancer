@@ -129,9 +129,12 @@ func getUnbalanceBL(brokers []brokerLoad) float64 {
 
 	avgBrokerLoad := sumBrokerLoad / float64(len(brokers))
 
+	//fmt.Printf("SumBrokerLoad: %f MaxBrokerLoad: %f AvgBrokerLoad: %f\n", sumBrokerLoad, maxBrokerLoad, avgBrokerLoad)
+
 	var brokerUnbalance float64
 	for _, broker := range brokers {
 		relBrokerLoad := broker.Load/avgBrokerLoad - 1.0
+		//fmt.Printf("broker #%d load: %f relBrokerLoad: %f\n", broker.ID, broker.Load, relBrokerLoad)
 		if relBrokerLoad > 0 {
 			brokerUnbalance += relBrokerLoad * relBrokerLoad
 		} else {
@@ -139,6 +142,7 @@ func getUnbalanceBL(brokers []brokerLoad) float64 {
 		}
 	}
 
+	//fmt.Printf("brokerUnbalance: %f\n", brokerUnbalance)
 	return brokerUnbalance
 }
 
@@ -150,13 +154,41 @@ func singlepl(p Partition) *PartitionList {
 	return &PartitionList{Version: 1, Partitions: []Partition{p}}
 }
 
+func findBrokerPos(p Partition, find BrokerID) int {
+	for idx, id := range p.Replicas {
+		if id == find {
+			return idx
+		}
+	}
+	return -1
+}
+
 func replacepl(p Partition, orig BrokerID, repl BrokerID) *PartitionList {
+	//fmt.Printf("Before replacepl %v\n", p)
+
 	for idx, id := range p.Replicas {
 		if id == orig {
+			/*fmt.Printf("Replace partition %s from %s to %s\n",
+				p.Partition.String(),
+				orig.String(),
+				repl.String(),
+			)*/
+
 			if repl == -1 {
 				p.Replicas = append(p.Replicas[:idx], p.Replicas[idx+1:]...)
 			} else {
-				p.Replicas[idx] = repl
+				// We can't just set the replica, we need to swap it if it exists
+				existingIdx := findBrokerPos(p, repl)
+				if existingIdx > -1 {
+					//		fmt.Printf("balance leader swap\n")
+					// swap
+					existing := p.Replicas[idx]
+					p.Replicas[idx] = repl
+					p.Replicas[existingIdx] = existing
+				} else {
+					// just set it.
+					p.Replicas[idx] = repl
+				}
 			}
 			return singlepl(p)
 		}

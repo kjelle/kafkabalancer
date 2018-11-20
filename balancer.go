@@ -11,6 +11,7 @@ import (
 // RebalanceConfig contains the configuration that drives the rebalancing.
 type RebalanceConfig struct {
 	AllowLeaderRebalancing    bool
+	RebalanceLeaders          bool
 	MinReplicasForRebalancing int
 	MinUnbalance              float64
 	CompletePartition         bool
@@ -23,6 +24,7 @@ type RebalanceConfig struct {
 func DefaultRebalanceConfig() RebalanceConfig {
 	return RebalanceConfig{
 		AllowLeaderRebalancing:    false,
+		RebalanceLeaders:          false,
 		MinReplicasForRebalancing: 2,
 		MinUnbalance:              0.01,
 		CompletePartition:         true,
@@ -36,6 +38,7 @@ var steps = []func(*PartitionList, RebalanceConfig) (*PartitionList, error){
 	RemoveExtraReplicas,
 	AddMissingReplicas,
 	MoveDisallowedReplicas,
+	ReassignLeaders,
 	MoveLeaders,
 	MoveNonLeaders,
 }
